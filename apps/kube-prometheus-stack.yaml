@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+
+spec:
+  project: default
+
+  source:
+    chart: kube-prometheus-stack
+    repoURL: https://prometheus-community.github.io/helm-charts
+    targetRevision: 88.5.4
+    helm:
+      values: |
+        prometheus:
+          prometheusSpec:
+            storageSpec: {}
+        grafana:
+          persistence:
+            enabled: false
+
+  destination:
+    namespace: monitoring
+    server: https://kubernetes.default.svc
+
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
