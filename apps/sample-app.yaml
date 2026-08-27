@@ -14,6 +14,10 @@ spec:
     repoURL: 'https://github.com/vladimir-evdokimov-pro/03-sample-app-microservice'
     targetRevision: main
     path: chart
+    helm:
+      parameters:
+        - name: "image.repository"
+          value: "europe-west9-docker.pkg.dev/gke-devsecops-stack-26/order-service-repo/sample-app"
 
   destination:
     server: 'https://kubernetes.default.svc'
