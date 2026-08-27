@@ -4,22 +4,25 @@
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
 [![NGINX Ingress](https://img.shields.io/badge/NGINX_Ingress-009639?style=for-the-badge&logo=nginx&logoColor=white)](https://kubernetes.github.io/ingress-nginx/)
 [![Let's Encrypt](https://img.shields.io/badge/Let's_Encrypt-003A70?style=for-the-badge&logo=letsencrypt&logoColor=white)](https://letsencrypt.org/)
+[![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?style=for-the-badge&logo=prometheus&logoColor=white)](https://prometheus.io/)
+[![Grafana](https://img.shields.io/badge/Grafana-F46800?style=for-the-badge&logo=grafana&logoColor=white)](https://grafana.com/)
 [![GitOps](https://img.shields.io/badge/GitOps-Declarative-00C853?style=for-the-badge)](#architecture--core-components)
 
-> **Enterprise Platform Core:** A fully automated GitOps repository leveraging Argo CD's "App of Apps" pattern to manage core Kubernetes infrastructure components, automated TLS certificate issuing, ingress routing, and application workload parameter injection on Private GKE.
+> **Enterprise Platform Core:** A fully automated GitOps repository leveraging Argo CD's "App of Apps" pattern to manage core Kubernetes infrastructure components, automated TLS certificate issuing, ingress routing, observability stack, and application workload parameter injection on Private GKE.
 
 ---
 
 ## Executive Summary
 
-This repository acts as the continuous delivery engine (Project 2 of 3) for the Cloud-Native platform built on GKE and Cloud SQL. It enforces a declarative, Git-driven workflow to deploy and maintain platform-level controllers, TLS issuers, ingress routes, and application workloads without manual `kubectl` intervention.
+This repository acts as the continuous delivery engine (Project 2 of 3) for the Cloud-Native platform built on GKE and Cloud SQL. It enforces a declarative, Git-driven workflow to deploy and maintain platform-level controllers, TLS issuers, ingress routes, monitoring stack, and application workloads without manual `kubectl` intervention.
 
 ---
 
 ## Key Features & Platform Standards
 
-* **App of Apps Pattern:** A single `root-app` monitors the `apps/` directory, automatically discovering and syncing all sub-applications (ingress, cert-manager, sample-app).
+* **App of Apps Pattern:** A single `root-app` monitors the `apps/` directory, automatically discovering and syncing all sub-applications (ingress, cert-manager, monitoring, sample-app).
 * **Helm Parameter Injection (Clean GitOps):** `apps/sample-app.yaml` overrides Helm chart values dynamically, injecting the target Google Artifact Registry image path (`order-service-repo/sample-app`). This keeps the application repository (**`03-sample-app-microservice`**) completely environment-agnostic.
+* **Full Observability Stack (kube-prometheus-stack):** Automated deployment of Prometheus, Grafana, and Alertmanager using `ServerSideApply` to manage large CRDs gracefully and provide out-of-the-box cluster dashboards.
 * **Automated TLS (cert-manager):** Integrated with Let's Encrypt via HTTP-01 challenge (`ClusterIssuer`) for zero-touch SSL certificate provisioning and renewal.
 * **Production Ingress (ingress-nginx):** Centralized entry point for managing incoming traffic to internal services and cluster tools.
 * **Configuration Drift Prevention:** Automated synchronization with `selfHeal: true` and `prune: true` enabled across all application manifests to eliminate manual cluster modifications.
@@ -48,6 +51,7 @@ graph TD
     classDef gitBlue fill:#ffffff,stroke:#2563eb,stroke-width:2px,color:#1e3a8a;
     classDef k8sGreen fill:#ffffff,stroke:#16a34a,stroke-width:2px,color:#14532d;
     classDef certYellow fill:#ffffff,stroke:#ca8a04,stroke-width:2px,color:#713f12;
+    classDef promOrange fill:#ffffff,stroke:#ea580c,stroke-width:2px,color:#9a3412;
 
     subgraph GITHUB["<font color='#0f172a'><b>GitOps Repository (02-platform-gitops-config)</b></font>"]
         ROOT_FILE["bootstrap/root-app.yaml"]:::gitBlue
@@ -56,13 +60,14 @@ graph TD
 
     subgraph ARGOCD["<font color='#1e40af'><b>Argo CD (GitOps Controller)</b></font>"]
         ROOT_APP["root-app (Master Synchronizer)"]:::k8sGreen
-        SUB_APPS["Platform Applications<br/>(ingress-nginx, cert-manager, cluster-issuer, sample-app)"]:::k8sGreen
+        SUB_APPS["Platform Applications<br/>(ingress-nginx, cert-manager, cluster-issuer, monitoring, sample-app)"]:::k8sGreen
     end
 
     subgraph INFRA["<font color='#166534'><b>GKE Cluster Infrastructure</b></font>"]
         NGINX["NGINX Ingress Controller"]:::k8sGreen
         CERT["cert-manager"]:::certYellow
         ISSUER["ClusterIssuer<br/>(Let's Encrypt Prod)"]:::certYellow
+        MONITORING["Monitoring Stack<br/>(Prometheus & Grafana)"]:::promOrange
         WORKLOAD["Microservice Deployment<br/>(sample-app-microservice)"]:::k8sGreen
     end
 
@@ -72,6 +77,7 @@ graph TD
     SUB_APPS -->|Provisions| NGINX
     SUB_APPS -->|Provisions| CERT
     SUB_APPS -->|Provisions| ISSUER
+    SUB_APPS -->|Provisions| MONITORING
     SUB_APPS -->|Injects GAR Repo & Deploys| WORKLOAD
 ```
 
@@ -86,6 +92,7 @@ graph TD
 │   ├── cert-manager.yaml        # Deploys cert-manager via Helm
 │   ├── cluster-issuer.yaml      # Instantiates Let's Encrypt ClusterIssuer
 │   ├── ingress-nginx.yaml       # Deploys NGINX Ingress Controller via Helm
+│   ├── kube-prometheus-stack.yaml # Deploys Prometheus & Grafana stack via Helm
 │   └── sample-app.yaml          # Argo CD Application manifest for sample-app (Repo 03)
 ├── bootstrap/                   # Initial cluster bootstrapping manifests
 │   ├── kustomization.yaml       # Bootstrap manifests aggregation
@@ -147,6 +154,23 @@ Query the public IP address provided by the LoadBalancer:
 ```bash
 curl http://<EXTERNAL-IP>
 ```
+
+### Access Grafana Dashboards
+
+1. **Retrieve the auto-generated admin password:**
+   ```bash
+   kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath="{.data.admin-password}" | base64 -d; echo
+   ```
+
+2. **Establish port-forwarding to the Grafana service:**
+   ```bash
+   kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
+   ```
+
+3. **Access the web interface:**
+   * **URL:** `http://localhost:3000`
+   * **Username:** `admin`
+   * **Password:** *(Output from Step 1)*
 
 ---
 
