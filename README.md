@@ -6,23 +6,23 @@
 [![Let's Encrypt](https://img.shields.io/badge/Let's_Encrypt-003A70?style=for-the-badge&logo=letsencrypt&logoColor=white)](https://letsencrypt.org/)
 [![GitOps](https://img.shields.io/badge/GitOps-Declarative-00C853?style=for-the-badge)](#architecture--core-components)
 
-> **Enterprise Platform Core:** A fully automated GitOps repository leveraging Argo CD's "App of Apps" pattern to manage core Kubernetes infrastructure components, automated TLS certificate issuing, and ingress routing on Private GKE.
+> **Enterprise Platform Core:** A fully automated GitOps repository leveraging Argo CD's "App of Apps" pattern to manage core Kubernetes infrastructure components, automated TLS certificate issuing, ingress routing, and application workload parameter injection on Private GKE.
 
 ---
 
 ## Executive Summary
 
-This repository acts as the continuous delivery engine (Project 2 of 3) for the Cloud-Native platform built on GKE and Cloud SQL. It enforces a declarative, Git-driven workflow to deploy and maintain platform-level controllers, TLS issuers, and ingress routes without manual `kubectl` intervention.
+This repository acts as the continuous delivery engine (Project 2 of 3) for the Cloud-Native platform built on GKE and Cloud SQL. It enforces a declarative, Git-driven workflow to deploy and maintain platform-level controllers, TLS issuers, ingress routes, and application workloads without manual `kubectl` intervention.
 
 ---
 
 ## Key Features & Platform Standards
 
-* **App of Apps Pattern:** A single `root-app` monitors the `apps/` directory, automatically discovering and syncing all sub-applications.
+* **App of Apps Pattern:** A single `root-app` monitors the `apps/` directory, automatically discovering and syncing all sub-applications (ingress, cert-manager, sample-app).
+* **Helm Parameter Injection (Clean GitOps):** `apps/sample-app.yaml` overrides Helm chart values dynamically, injecting the target Google Artifact Registry image path (`order-service-repo/sample-app`). This keeps the application repository (**`03-sample-app-microservice`**) completely environment-agnostic.
 * **Automated TLS (cert-manager):** Integrated with Let's Encrypt via HTTP-01 challenge (`ClusterIssuer`) for zero-touch SSL certificate provisioning and renewal.
-* **Production Ingress (ingress-nginx):** Centralized entry-point for managing incoming traffic to internal services and cluster tools.
+* **Production Ingress (ingress-nginx):** Centralized entry point for managing incoming traffic to internal services and cluster tools.
 * **Configuration Drift Prevention:** Automated synchronization with `selfHeal: true` and `prune: true` enabled across all application manifests to eliminate manual cluster modifications.
-* **Secure Backend Communication:** Configured with `nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"` to establish end-to-end TLS communication with Argo CD's internal server without `502 Bad Gateway` errors.
 
 ---
 
@@ -56,14 +56,14 @@ graph TD
 
     subgraph ARGOCD["<font color='#1e40af'><b>Argo CD (GitOps Controller)</b></font>"]
         ROOT_APP["root-app (Master Synchronizer)"]:::k8sGreen
-        SUB_APPS["Platform Applications<br/>(ingress-nginx, cert-manager, cluster-issuer, argocd-ingress)"]:::k8sGreen
+        SUB_APPS["Platform Applications<br/>(ingress-nginx, cert-manager, cluster-issuer, sample-app)"]:::k8sGreen
     end
 
     subgraph INFRA["<font color='#166534'><b>GKE Cluster Infrastructure</b></font>"]
         NGINX["NGINX Ingress Controller"]:::k8sGreen
         CERT["cert-manager"]:::certYellow
         ISSUER["ClusterIssuer<br/>(Let's Encrypt Prod)"]:::certYellow
-        INGRESS["Argo CD Ingress<br/>(argocd.&lt;INGRESS_IP&gt;.sslip.io)"]:::k8sGreen
+        WORKLOAD["Microservice Deployment<br/>(sample-app-microservice)"]:::k8sGreen
     end
 
     ROOT_FILE -->|Initial Bootstrap| ROOT_APP
@@ -72,8 +72,7 @@ graph TD
     SUB_APPS -->|Provisions| NGINX
     SUB_APPS -->|Provisions| CERT
     SUB_APPS -->|Provisions| ISSUER
-    SUB_APPS -->|Provisions| INGRESS
-    INGRESS <==>|Request TLS Cert| ISSUER
+    SUB_APPS -->|Injects GAR Repo & Deploys| WORKLOAD
 ```
 
 ---
@@ -86,7 +85,8 @@ graph TD
 │   ├── argocd-ingress.yaml      # Exposes Argo CD via Ingress & TLS
 │   ├── cert-manager.yaml        # Deploys cert-manager via Helm
 │   ├── cluster-issuer.yaml      # Instantiates Let's Encrypt ClusterIssuer
-│   └── ingress-nginx.yaml       # Deploys NGINX Ingress Controller via Helm
+│   ├── ingress-nginx.yaml       # Deploys NGINX Ingress Controller via Helm
+│   └── sample-app.yaml          # Argo CD Application manifest for sample-app (Repo 03)
 ├── bootstrap/                   # Initial cluster bootstrapping manifests
 │   ├── kustomization.yaml       # Bootstrap manifests aggregation
 │   ├── namespace.yaml           # argocd namespace definition
@@ -102,22 +102,12 @@ graph TD
 
 ---
 
-## Setup & Variables Configuration
-
-Before applying these manifests to your cluster, update the following placeholders across the repository files to match your setup:
-
-1. **GitHub Organization/User:** Replace `<YOUR_GITHUB_USERNAME>` in `bootstrap/root-app.yaml` and `apps/*.yaml` with your GitHub account name.
-2. **Contact Email:** Replace `<YOUR_EMAIL>` in `infrastructure/cert-manager/cluster-issuer.yaml` with a valid email address for Let's Encrypt notifications.
-3. **Ingress Hostnames:** Update the domain references in `infrastructure/argocd/ingress.yaml` to match your LoadBalancer IP (`argocd.<INGRESS_IP>.sslip.io`) or custom domain.
-
----
-
 ## Deployment Quickstart
 
 ### Prerequisites
 
 * GKE Cluster deployed and accessible via `kubectl` (from **`01-platform-infra-terraform`**).
-* **Argo CD** core installed in the cluster namespace.
+* **Argo CD** core installed in the `argocd` namespace.
 
 ### 1. Bootstrap the Platform
 
@@ -130,40 +120,33 @@ kubectl apply -f bootstrap/root-app.yaml
 
 Argo CD will immediately pick up the `root-app` and start reconciling all applications inside the `apps/` directory.
 
-### 2. Force Sync (Optional)
+### 2. Force Sync Applications
 
-To force Argo CD to immediately re-scan the repository:
+To force Argo CD to immediately re-scan the repository and reconcile state:
 
 ```bash
 kubectl patch application root-app -n argocd --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}'
+kubectl patch application sample-app -n argocd --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}'
 ```
 
 ---
 
-## Access & Security Posture
+## Access & Verification
 
-### Public Endpoint Access
+### Verify Microservice Deployment
 
-The Argo CD UI is securely exposed via NGINX Ingress with automated TLS termination.
-
-1. Retrieve your external Ingress IP address:
-   ```bash
-   kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-   ```
-
-2. Access the UI:
-   * **URL:** `https://argocd.<INGRESS_IP>.sslip.io`
-   * **Default Username:** `admin`
-
-### Retrieve Initial Password
-
-Execute the following command to retrieve the auto-generated administrator password:
+Check that the application pods and LoadBalancer service are running in the target namespace:
 
 ```bash
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+kubectl get pods -n devsecops-app
+kubectl get svc sample-app -n devsecops-app
 ```
 
-> **Security Note:** In a production environment, change the administrator password immediately via the UI upon first login, and delete the initial secret from the cluster (`kubectl delete secret argocd-initial-admin-secret -n argocd`).
+Query the public IP address provided by the LoadBalancer:
+
+```bash
+curl http://<EXTERNAL-IP>
+```
 
 ---
 
@@ -171,6 +154,6 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.pas
 
 This repository is **Part 2 of 3** in the Cloud-Native End-to-End Platform series:
 
-1. [**`01-platform-infra-terraform`**](https://github.com/<YOUR_GITHUB_USERNAME>/01-platform-infra-terraform) — Provisioning base cloud infrastructure (VPC, GKE Private, Cloud SQL, Artifact Registry).
-2. **`02-platform-gitops-config`** *(This repository)* — GitOps engine, Kubernetes controllers & cluster configuration (Argo CD, Ingress, Cert-Manager).
-3. [**`03-sample-app-microservice`**](https://github.com/<YOUR_GITHUB_USERNAME>/03-sample-app-microservice) — Microservice application workloads and deployment manifests.
+1. [**`01-platform-infra-terraform`**](https://github.com/vladimir-evdokimov-pro/01-platform-infra-terraform) — Base cloud infrastructure provisioning (VPC, GKE Private, Cloud SQL, Artifact Registry).
+2. **`02-platform-gitops-config`** *(This repository)* — GitOps engine, Kubernetes controllers & Helm parameter overrides.
+3. [**`03-sample-app-microservice`**](https://github.com/vladimir-evdokimov-pro/03-sample-app-microservice) — Microservice application workload, Dockerfile, Helm chart, and CI automation pipeline.
