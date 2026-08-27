@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+
+metadata:
+  name: sample-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+
+spec:
+  project: default
+
+  source:
+    repoURL: 'https://github.com/vladimir-evdokimov-pro/03-sample-app-microservice'
+    targetRevision: main
+    path: chart
+
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: devsecops-app
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
