@@ -1,0 +1,27 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+
+metadata:
+  name: monitoring-stack
+  namespace: devsecops-app
+  labels: 
+    release: kube-prometheus-stack
+
+spec:
+  
+  source:
+    helm:
+      values: |
+        coreDns: 
+          enbaled: false
+        kubeDns:
+          enbaled: false
+
+  selector:
+    matchLabels:
+      app: sample-app-microservice
+
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s 
