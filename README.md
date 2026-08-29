@@ -6,23 +6,24 @@
 [![Let's Encrypt](https://img.shields.io/badge/Let's_Encrypt-003A70?style=for-the-badge&logo=letsencrypt&logoColor=white)](https://letsencrypt.org/)
 [![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?style=for-the-badge&logo=prometheus&logoColor=white)](https://prometheus.io/)
 [![Grafana](https://img.shields.io/badge/Grafana-F46800?style=for-the-badge&logo=grafana&logoColor=white)](https://grafana.com/)
+[![Loki](https://img.shields.io/badge/Loki-F46800?style=for-the-badge&logo=grafana&logoColor=white)](https://grafana.com/oss/loki/)
 [![GitOps](https://img.shields.io/badge/GitOps-Declarative-00C853?style=for-the-badge)](#architecture--core-components)
 
-> **Enterprise Platform Core:** A fully automated GitOps repository leveraging Argo CD's "App of Apps" pattern to manage core Kubernetes infrastructure components, automated TLS certificate issuing, ingress routing, observability stack, and application workload parameter injection on Private GKE.
+> **Enterprise Platform Core:** A fully automated GitOps repository leveraging Argo CD's "App of Apps" pattern to manage core Kubernetes infrastructure components, automated TLS certificate issuing, ingress routing, unified observability and central log aggregation stack, and application workload parameter injection on Private GKE.
 
 ---
 
 ## Executive Summary
 
-This repository acts as the continuous delivery engine (Project 2 of 3) for the Cloud-Native platform built on GKE and Cloud SQL. It enforces a declarative, Git-driven workflow to deploy and maintain platform-level controllers, TLS issuers, ingress routes, monitoring stack, and application workloads without manual `kubectl` intervention.
+This repository acts as the continuous delivery engine (Project 2 of 3) for the Cloud-Native platform built on GKE and Cloud SQL. It enforces a declarative, Git-driven workflow to deploy and maintain platform-level controllers, TLS issuers, ingress routes, monitoring & logging stack, and application workloads without manual `kubectl` intervention.
 
 ---
 
 ## Key Features & Platform Standards
 
-* **App of Apps Pattern:** A single `root-app` monitors the `apps/` directory, automatically discovering and syncing all sub-applications (ingress, cert-manager, monitoring, sample-app).
+* **App of Apps Pattern:** A single `root-app` monitors the `apps/` directory, automatically discovering and syncing all sub-applications (ingress, cert-manager, monitoring, loki-stack, sample-app).
 * **Helm Parameter Injection (Clean GitOps):** `apps/sample-app.yaml` overrides Helm chart values dynamically, injecting the target Google Artifact Registry image path (`order-service-repo/sample-app`). This keeps the application repository (**`03-sample-app-microservice`**) completely environment-agnostic.
-* **Full Observability Stack (kube-prometheus-stack):** Automated deployment of Prometheus, Grafana, and Alertmanager using `ServerSideApply` to manage large CRDs gracefully and provide out-of-the-box cluster dashboards.
+* **Full Observability & Centralized Logging Stack:** Automated deployment of Prometheus, Grafana, and Alertmanager (`kube-prometheus-stack`) alongside centralized log aggregation with Loki and Promtail (`loki-stack`). Uses `ServerSideApply` to manage large CRDs gracefully and provide out-of-the-box cluster dashboards and log exploration.
 * **Automated TLS (cert-manager):** Integrated with Let's Encrypt via HTTP-01 challenge (`ClusterIssuer`) for zero-touch SSL certificate provisioning and renewal.
 * **Production Ingress (ingress-nginx):** Centralized entry point for managing incoming traffic to internal services and cluster tools.
 * **Configuration Drift Prevention:** Automated synchronization with `selfHeal: true` and `prune: true` enabled across all application manifests to eliminate manual cluster modifications.
@@ -60,14 +61,14 @@ graph TD
 
     subgraph ARGOCD["<font color='#1e40af'><b>Argo CD (GitOps Controller)</b></font>"]
         ROOT_APP["root-app (Master Synchronizer)"]:::k8sGreen
-        SUB_APPS["Platform Applications<br/>(ingress-nginx, cert-manager, cluster-issuer, monitoring, sample-app)"]:::k8sGreen
+        SUB_APPS["Platform Applications<br/>(ingress-nginx, cert-manager, cluster-issuer, monitoring, loki-stack, sample-app)"]:::k8sGreen
     end
 
     subgraph INFRA["<font color='#166534'><b>GKE Cluster Infrastructure</b></font>"]
         NGINX["NGINX Ingress Controller"]:::k8sGreen
         CERT["cert-manager"]:::certYellow
         ISSUER["ClusterIssuer<br/>(Let's Encrypt Prod)"]:::certYellow
-        MONITORING["Monitoring Stack<br/>(Prometheus & Grafana)"]:::promOrange
+        MONITORING["Observability Stack<br/>(Prometheus, Grafana, Loki & Promtail)"]:::promOrange
         WORKLOAD["Microservice Deployment<br/>(sample-app-microservice)"]:::k8sGreen
     end
 
@@ -93,6 +94,7 @@ graph TD
 │   ├── cluster-issuer.yaml      # Instantiates Let's Encrypt ClusterIssuer
 │   ├── ingress-nginx.yaml       # Deploys NGINX Ingress Controller via Helm
 │   ├── kube-prometheus-stack.yaml # Deploys Prometheus & Grafana stack via Helm
+│   ├── loki-stack.yaml          # Deploys Loki & Promtail log aggregation stack via Helm
 │   └── sample-app.yaml          # Argo CD Application manifest for sample-app (Repo 03)
 ├── bootstrap/                   # Initial cluster bootstrapping manifests
 │   ├── kustomization.yaml       # Bootstrap manifests aggregation
@@ -155,22 +157,46 @@ Query the public IP address provided by the LoadBalancer:
 curl http://<EXTERNAL-IP>
 ```
 
-### Access Grafana Dashboards
+### Access Grafana Dashboards & Centralized Logs
 
 1. **Retrieve the auto-generated admin password:**
-   ```bash
-   kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath="{.data.admin-password}" | base64 -d; echo
-   ```
+   * **Linux / macOS:**
+     ```bash
+     kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath="{.data.admin-password}" | base64 -d; echo
+     ```
+   * **PowerShell (Windows):**
+     ```powershell
+     [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($(kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath="{.data.admin-password}")))
+     ```
 
 2. **Establish port-forwarding to the Grafana service:**
    ```bash
    kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
    ```
 
-3. **Access the web interface:**
-   * **URL:** `http://localhost:3000`
-   * **Username:** `admin`
-   * **Password:** *(Output from Step 1)*
+3. **Explore Metrics & Real-time Logs:**
+   * Open `http://localhost:3000` in your browser and log in with username `admin`.
+   * Go to **Explore** (compass icon) in the left navigation bar.
+   * Select **Loki** from the Data Source dropdown list.
+   * Enter the LogQL query to view live application logs:
+     ```text
+     {namespace="devsecops-app"}
+     ```
+
+### Verify Observability Workloads
+
+Check that all monitoring, scraping, and log collection components are operational:
+
+```bash
+# Check Loki storage & Promtail daemonset pods
+kubectl get pods -n monitoring -l "app in (loki,promtail)"
+
+# Check Prometheus & Grafana stack pods
+kubectl get pods -n monitoring -l release=kube-prometheus-stack
+
+# Check application metrics target configuration
+kubectl get servicemonitor -n devsecops-app
+```
 
 ---
 
@@ -179,5 +205,5 @@ curl http://<EXTERNAL-IP>
 This repository is **Part 2 of 3** in the Cloud-Native End-to-End Platform series:
 
 1. [**`01-platform-infra-terraform`**](https://github.com/vladimir-evdokimov-pro/01-platform-infra-terraform) — Base cloud infrastructure provisioning (VPC, GKE Private, Cloud SQL, Artifact Registry).
-2. **`02-platform-gitops-config`** *(This repository)* — GitOps engine, Kubernetes controllers & Helm parameter overrides.
+2. **`02-platform-gitops-config`** *(This repository)* — GitOps engine, Kubernetes controllers, observability, centralized logging & Helm parameter overrides.
 3. [**`03-sample-app-microservice`**](https://github.com/vladimir-evdokimov-pro/03-sample-app-microservice) — Microservice application workload, Dockerfile, Helm chart, and CI automation pipeline.
